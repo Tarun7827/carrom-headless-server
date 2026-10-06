@@ -1,0 +1,7 @@
+{
+  "boardCount": 10,
+  "fixedDeltaTime": 0.008333333,
+  "maxSimulationSteps": 4000,
+  "sleepVelocityThreshold": 0.05,
+  "maxQueuedRequests": 1000
+}

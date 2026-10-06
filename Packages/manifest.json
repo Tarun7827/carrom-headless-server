@@ -1,0 +1,7 @@
+{
+  "dependencies": {
+    "com.unity.2d.physics": "1.0.0",
+    "com.unity.modules.physics2d": "1.0.0",
+    "com.unity.modules.jsonserialize": "1.0.0"
+  }
+}
