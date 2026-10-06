@@ -7,125 +7,26 @@ using Carrom.Headless.Infrastructure;
 using Carrom.Headless.Networking;
 using Carrom.Headless.Simulation;
 using Debug=UnityEngine.Debug;
-
 namespace Carrom.Headless.Core
 {
-    public sealed class SimulationServer : MonoBehaviour
+    public sealed class SimulationServer:MonoBehaviour
     {
         const int DefaultBoardCount=10,DefaultPort=8080,DefaultQueueCapacity=1000,MaxTokens=19;
         const float MinSimulationSeconds=0.05f,DefaultMaxSimulationSeconds=8f,DefaultTimeScale=50f;
         public int boardCount=DefaultBoardCount,port=DefaultPort,queueCapacity=DefaultQueueCapacity;
         public float maxSimulationSeconds=DefaultMaxSimulationSeconds,timeScale=DefaultTimeScale;
-        readonly ConcurrentQueue<SimulationJob> _queue=new ConcurrentQueue<SimulationJob>();
-        BoardPool _pool; WebSocketServer _ws; int _activeJobs; volatile bool _shuttingDown;
-        public int QueuedJobs=>_queue.Count; public int ActiveJobs=>_activeJobs; public int AvailableBoards=>_pool==null?0:_pool.AvailableCount;
-
-        void Awake()
-        {
-            Application.targetFrameRate=-1; QualitySettings.vSyncCount=0;
-            Physics2D.simulationMode=SimulationMode2D.Script; Time.fixedDeltaTime=CarromConstants.FixedStep;
-            ApplyRuntimeConfiguration(); BuildBoards();
-            _ws=new WebSocketServer(port,OnMessage); _ws.Start();
-            Debug.Log($"Carrom headless server listening on ws://0.0.0.0:{port} boards={boardCount} queue={queueCapacity}");
-        }
-
-        void ApplyRuntimeConfiguration()
-        {
-            boardCount=ReadInt("CARROM_BOARD_COUNT",boardCount,1,64); port=ReadInt("CARROM_PORT",port,1,65535);
-            queueCapacity=ReadInt("CARROM_QUEUE_CAPACITY",queueCapacity,1,100000);
-            maxSimulationSeconds=ReadFloat("CARROM_MAX_SIMULATION_SECONDS",maxSimulationSeconds,MinSimulationSeconds,60f);
-            timeScale=ReadFloat("CARROM_TIME_SCALE",timeScale,1f,1000f);
-            boardCount=ReadArgInt("-boardCount",boardCount,1,64); port=ReadArgInt("-port",port,1,65535);
-            queueCapacity=ReadArgInt("-queueCapacity",queueCapacity,1,100000);
-            maxSimulationSeconds=ReadArgFloat("-maxSimulationSeconds",maxSimulationSeconds,MinSimulationSeconds,60f);
-            timeScale=ReadArgFloat("-timeScale",timeScale,1f,1000f); Time.timeScale=timeScale;
-        }
-
-        void BuildBoards()
-        {
-            var boards=new System.Collections.Generic.List<CarromBoard>(boardCount);
-            for(int i=0;i<boardCount;i++){var go=new GameObject($"CarromBoard_{i+1:00}");go.transform.position=new Vector3((i%5)*20f,(i/5)*20f,0);var board=go.AddComponent<CarromBoard>();board.Build(i+1);boards.Add(board);}
-            _pool=new BoardPool(boards);
-        }
-
-        void OnMessage(WebSocketConnection connection,string payload)
-        {
-            if(_shuttingDown){connection.Send(Json.Serialize(SimulationResponse.Failure("server-shutting-down","Server is shutting down.")));return;}
-            try
-            {
-                var request=Json.Deserialize<SimulationRequest>(payload); Validate(request);
-                if(_queue.Count>=queueCapacity){connection.Send(Json.Serialize(SimulationResponse.Failure(request.requestId,"Server is busy. Retry with backoff.")));return;}
-                _queue.Enqueue(new SimulationJob{Request=request,Complete=response=>connection.Send(Json.Serialize(response))});
-            }
-            catch(Exception e){connection.Send(Json.Serialize(SimulationResponse.Failure(SafeRequestId(payload),e.Message)));}
-        }
-
+        readonly ConcurrentQueue<SimulationJob> _queue=new ConcurrentQueue<SimulationJob>(); BoardPool _pool; WebSocketServer _ws; int _activeJobs; volatile bool _shuttingDown;
+        public int QueuedJobs=>_queue.Count;public int ActiveJobs=>_activeJobs;public int AvailableBoards=>_pool==null?0:_pool.AvailableCount;
+        void Awake(){Application.targetFrameRate=-1;QualitySettings.vSyncCount=0;Physics2D.simulationMode=SimulationMode2D.Script;Time.fixedDeltaTime=CarromConstants.FixedStep;ApplyRuntimeConfiguration();BuildBoards();_ws=new WebSocketServer(port,OnMessage);_ws.Start();Debug.Log($"Carrom headless server listening on ws://0.0.0.0:{port} boards={boardCount} queue={queueCapacity}");}
+        void ApplyRuntimeConfiguration(){boardCount=ReadInt("CARROM_BOARD_COUNT",boardCount,1,64);port=ReadInt("CARROM_PORT",port,1,65535);queueCapacity=ReadInt("CARROM_QUEUE_CAPACITY",queueCapacity,1,100000);maxSimulationSeconds=ReadFloat("CARROM_MAX_SIMULATION_SECONDS",maxSimulationSeconds,MinSimulationSeconds,60f);timeScale=ReadFloat("CARROM_TIME_SCALE",timeScale,1f,1000f);boardCount=ReadArgInt("-boardCount",boardCount,1,64);port=ReadArgInt("-port",port,1,65535);queueCapacity=ReadArgInt("-queueCapacity",queueCapacity,1,100000);maxSimulationSeconds=ReadArgFloat("-maxSimulationSeconds",maxSimulationSeconds,MinSimulationSeconds,60f);timeScale=ReadArgFloat("-timeScale",timeScale,1f,1000f);Time.timeScale=timeScale;}
+        void BuildBoards(){var boards=new System.Collections.Generic.List<CarromBoard>(boardCount);for(int i=0;i<boardCount;i++){var go=new GameObject($"CarromBoard_{i+1:00}");go.transform.position=new Vector3((i%5)*20f,(i/5)*20f,0);var board=go.AddComponent<CarromBoard>();board.Build(i+1);boards.Add(board);}_pool=new BoardPool(boards);}
+        void OnMessage(WebSocketConnection connection,string payload){if(_shuttingDown){connection.Send(Json.Serialize(SimulationResponse.Failure("server-shutting-down","Server is shutting down.")));return;}try{var request=Json.Deserialize<SimulationRequest>(payload);Validate(request);if(_queue.Count>=queueCapacity){connection.Send(Json.Serialize(SimulationResponse.Failure(request.requestId,"Server is busy. Retry with backoff.")));return;}_queue.Enqueue(new SimulationJob{Request=request,Complete=response=>connection.Send(Json.Serialize(response))});}catch(Exception e){connection.Send(Json.Serialize(SimulationResponse.Failure(SafeRequestId(payload),e.Message)));}}
         static string SafeRequestId(string payload){try{return Json.Deserialize<SimulationRequest>(payload)?.requestId??"unknown";}catch{return "unknown";}}
-
-        static void Validate(SimulationRequest request)
-        {
-            if(request==null)throw new InvalidOperationException("Invalid JSON payload.");
-            if(string.IsNullOrWhiteSpace(request.requestId)||request.requestId.Length>128)throw new InvalidOperationException("requestId is required and must be <= 128 characters.");
-            if(request.striker==null||request.striker.position==null)throw new InvalidOperationException("striker.position is required.");
-            if(request.tokens!=null&&request.tokens.Length>MaxTokens)throw new InvalidOperationException($"A maximum of {MaxTokens} tokens is supported.");
-            ValidateVector(request.striker.position,"striker.position"); ValidateVector(request.striker.velocity,"striker.velocity",true);
-            var seen=new System.Collections.Generic.HashSet<string>(StringComparer.Ordinal);
-            if(request.tokens==null)request.tokens=Array.Empty<TokenInput>();
-            foreach(var token in request.tokens)
-            {
-                if(token==null||string.IsNullOrWhiteSpace(token.id)||token.id.Length>64)throw new InvalidOperationException("Every token requires a unique id <= 64 characters.");
-                if(!seen.Add(token.id))throw new InvalidOperationException($"Duplicate token id: {token.id}.");
-                if(token.position==null)throw new InvalidOperationException($"Token {token.id} position is required.");
-                ValidateVector(token.position,$"token[{token.id}].position"); ValidateVector(token.velocity,$"token[{token.id}].velocity",true);
-            }
-            if(request.maxSimulationSeconds<=0)request.maxSimulationSeconds=8f;
-            if(request.maxSimulationSeconds>60f)throw new InvalidOperationException("maxSimulationSeconds must be <= 60.");
-        }
-
-        static void ValidateVector(Vector2Dto value,string field,bool allowNull=false)
-        {
-            if(value==null&&allowNull)return;
-            if(value==null||float.IsNaN(value.x)||float.IsNaN(value.y)||float.IsInfinity(value.x)||float.IsInfinity(value.y))throw new InvalidOperationException($"{field} must contain finite values.");
-            if(Mathf.Abs(value.x)>100f||Mathf.Abs(value.y)>100f)throw new InvalidOperationException($"{field} exceeds the supported range.");
-        }
-
-        void Update()
-        {
-            if(_shuttingDown)return;
-            var budget=Mathf.Max(1,boardCount);
-            while(budget-->0&&_queue.TryDequeue(out var job))
-            {
-                if(!_pool.TryAcquire(out var board)){_queue.Enqueue(job);break;}
-                job.Board=board; _activeJobs++;
-                try{job.Complete(Simulate(board,job.Request));}
-                catch(Exception e){job.Complete(SimulationResponse.Failure(job.Request.requestId,e.ToString(),board.BoardId));}
-                finally{board.Release();_pool.Release(board);_activeJobs--;}
-            }
-        }
-
-        SimulationResponse Simulate(CarromBoard board,SimulationRequest request)
-        {
-            board.BeginRequest(request);
-            var target=Mathf.Min(request.maxSimulationSeconds>0?request.maxSimulationSeconds:maxSimulationSeconds,maxSimulationSeconds);
-            var stopwatch=Stopwatch.StartNew(); float elapsed=0f; int stableSteps=0;
-            while(elapsed<target)
-            {
-                Physics2D.Simulate(CarromConstants.FixedStep); elapsed+=CarromConstants.FixedStep;
-                if(AllStopped(board))stableSteps++;else stableSteps=0; if(stableSteps>=12)break;
-            }
-            stopwatch.Stop();
-            var tokens=new TokenOutput[board.Tokens.Count]; var i=0;
-            foreach(var kv in board.Tokens)tokens[i++]=new TokenOutput{id=kv.Value.PieceId,type=kv.Value.PieceType,finalPosition=new Vector2Dto(kv.Value.Position.x,kv.Value.Position.y),finalVelocity=new Vector2Dto(kv.Value.Velocity.x,kv.Value.Velocity.y),pocketed=kv.Value.Pocketed};
-            return new SimulationResponse{requestId=request.requestId,success=true,boardId=board.BoardId,simulationTimeMs=(float)stopwatch.Elapsed.TotalMilliseconds,simulatedSeconds=elapsed,strikerFinalPosition=new Vector2Dto(board.Striker.Position.x,board.Striker.Position.y),strikerFinalVelocity=new Vector2Dto(board.Striker.Velocity.x,board.Striker.Velocity.y),strikerPocketed=board.Striker.Pocketed,tokens=tokens};
-        }
-
-        static bool AllStopped(CarromBoard board)
-        {
-            if(!board.Striker.Pocketed&&board.Striker.Velocity.sqrMagnitude>CarromConstants.StopSpeed*CarromConstants.StopSpeed)return false;
-            foreach(var token in board.Tokens.Values)if(!token.Pocketed&&token.Velocity.sqrMagnitude>CarromConstants.StopSpeed*CarromConstants.StopSpeed)return false;
-            return true;
-        }
-
+        static void Validate(SimulationRequest request){if(request==null)throw new InvalidOperationException("Invalid JSON payload.");if(string.IsNullOrWhiteSpace(request.requestId)||request.requestId.Length>128)throw new InvalidOperationException("requestId is required and must be <= 128 characters.");if(request.striker==null||request.striker.position==null)throw new InvalidOperationException("striker.position is required.");if(request.tokens!=null&&request.tokens.Length>MaxTokens)throw new InvalidOperationException($"A maximum of {MaxTokens} tokens is supported.");ValidateVector(request.striker.position,"striker.position");ValidateVector(request.striker.velocity,"striker.velocity",true);var seen=new System.Collections.Generic.HashSet<string>(StringComparer.Ordinal);if(request.tokens==null)request.tokens=Array.Empty<TokenInput>();foreach(var token in request.tokens){if(token==null||string.IsNullOrWhiteSpace(token.id)||token.id.Length>64)throw new InvalidOperationException("Every token requires a unique id <= 64 characters.");if(!seen.Add(token.id))throw new InvalidOperationException($"Duplicate token id: {token.id}.");if(token.position==null)throw new InvalidOperationException($"Token {token.id} position is required.");ValidateVector(token.position,$"token[{token.id}].position");ValidateVector(token.velocity,$"token[{token.id}].velocity",true);}if(request.maxSimulationSeconds<=0)request.maxSimulationSeconds=8f;if(request.maxSimulationSeconds>60f)throw new InvalidOperationException("maxSimulationSeconds must be <= 60.");}
+        static void ValidateVector(Vector2Dto value,string field,bool allowNull=false){if(value==null&&allowNull)return;if(value==null||float.IsNaN(value.x)||float.IsNaN(value.y)||float.IsInfinity(value.x)||float.IsInfinity(value.y))throw new InvalidOperationException($"{field} must contain finite values.");if(Mathf.Abs(value.x)>100f||Mathf.Abs(value.y)>100f)throw new InvalidOperationException($"{field} exceeds the supported range.");}
+        void Update(){if(_shuttingDown)return;var budget=Mathf.Max(1,boardCount);while(budget-->0&&_queue.TryDequeue(out var job)){if(!_pool.TryAcquire(out var board)){_queue.Enqueue(job);break;}job.Board=board;_activeJobs++;try{job.Complete(Simulate(board,job.Request));}catch(Exception e){job.Complete(SimulationResponse.Failure(job.Request.requestId,e.ToString(),board.BoardId));}finally{board.Release();_pool.Release(board);_activeJobs--;}}}
+        SimulationResponse Simulate(CarromBoard board,SimulationRequest request){board.BeginRequest(request);var target=Mathf.Min(request.maxSimulationSeconds>0?request.maxSimulationSeconds:maxSimulationSeconds,maxSimulationSeconds);var stopwatch=Stopwatch.StartNew();float elapsed=0f;int stableSteps=0;while(elapsed<target){Physics2D.Simulate(CarromConstants.FixedStep);elapsed+=CarromConstants.FixedStep;if(AllStopped(board))stableSteps++;else stableSteps=0;if(stableSteps>=12)break;}stopwatch.Stop();var tokens=new TokenOutput[board.Tokens.Count];var i=0;foreach(var kv in board.Tokens)tokens[i++]=new TokenOutput{id=kv.Value.PieceId,type=kv.Value.PieceType,finalPosition=new Vector2Dto(kv.Value.Position.x,kv.Value.Position.y),finalVelocity=new Vector2Dto(kv.Value.Velocity.x,kv.Value.Velocity.y),pocketed=kv.Value.Pocketed};return new SimulationResponse{requestId=request.requestId,success=true,boardId=board.BoardId,simulationTimeMs=(float)stopwatch.Elapsed.TotalMilliseconds,simulatedSeconds=elapsed,strikerFinalPosition=new Vector2Dto(board.Striker.Position.x,board.Striker.Position.y),strikerFinalVelocity=new Vector2Dto(board.Striker.Velocity.x,board.Striker.Velocity.y),strikerPocketed=board.Striker.Pocketed,tokens=tokens};}
+        static bool AllStopped(CarromBoard board){if(!board.Striker.Pocketed&&board.Striker.Velocity.sqrMagnitude>CarromConstants.StopSpeed*CarromConstants.StopSpeed)return false;foreach(var token in board.Tokens.Values)if(!token.Pocketed&&token.Velocity.sqrMagnitude>CarromConstants.StopSpeed*CarromConstants.StopSpeed)return false;return true;}
         void OnDestroy(){_shuttingDown=true;_ws?.Stop();}
         static int ReadInt(string env,int fallback,int min,int max)=>int.TryParse(Environment.GetEnvironmentVariable(env),out var value)?Mathf.Clamp(value,min,max):fallback;
         static float ReadFloat(string env,float fallback,float min,float max)=>float.TryParse(Environment.GetEnvironmentVariable(env),out var value)?Mathf.Clamp(value,min,max):fallback;
