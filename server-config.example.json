@@ -1,0 +1,8 @@
+{
+  "port": 8080,
+  "boardCount": 10,
+  "queueCapacity": 1000,
+  "timeScale": 50,
+  "fixedStep": 0.0083333,
+  "maxSimulationSeconds": 8
+}

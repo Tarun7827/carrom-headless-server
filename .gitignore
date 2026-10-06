@@ -1,25 +1,16 @@
-# Unity generated
 [Ll]ibrary/
 [Tt]emp/
 [Oo]bj/
 [Bb]uild/
 [Bb]uilds/
-[Ll]ogs/
-[Uu]ser[Ss]ettings/
-
-# IDE
+UserSettings/
+Logs/
+MemoryCaptures/
 .vscode/
 .idea/
 *.csproj
 *.sln
 *.suo
 *.user
-*.userprefs
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Generated server output
-Server/build/
-Server/logs/
+*.pidb
+*.booproj

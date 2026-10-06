@@ -1,9 +1,0 @@
-services:
-  carrom-server:
-    build: .
-    restart: unless-stopped
-    ports:
-      - "8080:8080"
-    environment:
-      CARROM_WORKER_BOARDS: "10"
-      CARROM_MAX_QUEUE: "1000"

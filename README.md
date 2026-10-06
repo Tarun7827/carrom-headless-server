@@ -1,95 +1,53 @@
-# Carrom Headless Server
+# Carrom Headless Simulation Server
 
-A server-authoritative Carrom simulation service built around Unity headless physics.
+Production-oriented Unity 6 headless simulation worker for authoritative Carrom shot validation.
 
-This project demonstrates how a real-time multiplayer game can validate a client shot on the server instead of trusting client-reported outcomes. Each request is assigned to an isolated board instance, simulated deterministically for the required physics steps, and returned as authoritative state.
+## What is in this repository
 
-## Architecture
+This repository is based only on the supplied Unity project. The server creates its simulation boards at runtime, so no visual assets are required for the headless worker.
 
 ```text
-Client
-  │ WebSocket
-  ▼
-Request Gateway
-  │ validate / deserialize
-  ▼
-Concurrent Simulation Queue
-  │
-  ▼
-Board Pool ──► acquire isolated board
-  │
-  ▼
-Restore State → Apply Shot → Physics2D.Simulate
-  │                              │
-  │                              ├─ collision detection
-  │                              └─ pocket detection
-  ▼
-Capture Authoritative Result
-  │
-  ▼
-Reset Board → Release to Pool
-  │
-  ▼
-Response Gateway
-  │
-  ▼
-Client
+WebSocket client
+      │
+      ▼
+RFC6455 gateway ──► request validation ──► bounded concurrent queue
+                                                │
+                                                ▼
+                                      isolated board pool (N)
+                                                │
+                                                ▼
+                                  restore state + apply shot
+                                                │
+                                                ▼
+                                   Physics2D.Simulate @ 120Hz
+                                                │
+                                                ▼
+                                  authoritative result + reset
+                                                │
+                                                ▼
+                                      WebSocket response
 ```
 
-## Why server-authoritative?
+## Runtime model
 
-A client should submit an intent (board state + striker input), not the result of the shot. The server owns the simulation and decides:
-
-- final striker position and velocity
-- token positions
-- pocketed tokens
-- collision-driven state transitions
-- whether the request is valid
-
-This prevents a modified client from simply reporting a favorable outcome.
-
-## Board pool and concurrency
-
-The server maintains a fixed pool of isolated simulation boards. A board transitions through:
-
-`Available → Reserved → Simulating → Resetting → Available`
-
-A concurrent queue absorbs requests while the board pool controls exclusive ownership. Tags are useful for editor/debug visibility, but pool state is the concurrency source of truth.
-
-The sample configuration contains 10 boards.
-
-## Simulation loop
-
-The headless runner advances Unity physics explicitly:
-
-```csharp
-while (!simulationFinished)
-{
-    Physics2D.Simulate(fixedDeltaTime);
-    DetectPocketEvents();
-    DetectStoppedBodies();
-
-    if (AllBodiesStopped())
-        simulationFinished = true;
-}
-```
-
-`Time.timeScale` can accelerate simulated time, but it does not guarantee wall-clock latency. Actual latency depends on physics complexity, CPU, collision count, and execution model.
+- Default pool: 10 isolated boards.
+- Physics: explicit `Physics2D.Simulate` at 120 Hz.
+- Networking: dependency-free RFC6455 text/ping/pong/close support.
+- Queue: bounded to provide backpressure instead of unbounded memory growth.
+- Unity API access: simulation is executed on Unity's main loop; networking may run concurrently.
+- Board state: pool ownership is the concurrency source of truth. `BoardAvailable` / `BoardBusy` tags are diagnostic only.
+- Token objects are reused per board to avoid creating an unbounded number of GameObjects across requests.
+- Requests are validated for size, duplicate IDs, finite numeric values, velocity limits and maximum token count.
+- Graceful shutdown stops accepting new work and closes the listener.
 
 ## Request
 
 ```json
 {
-  "requestId": "match_123_shot_456",
-  "boardState": {
-    "tokens": [
-      { "id": "black_01", "position": { "x": 0.0, "y": 0.0 } }
-    ]
-  },
-  "striker": {
-    "position": { "x": -2.15, "y": -4.2 },
-    "velocity": { "x": 8.4, "y": 12.7 }
-  }
+  "requestId":"shot-001",
+  "striker":{"position":{"x":0,"y":-3.5},"velocity":{"x":2.5,"y":12}},
+  "tokens":[{"id":"black-01","type":"black","position":{"x":0,"y":0},"velocity":{"x":0,"y":0}}],
+  "maxSimulationSeconds":8
 }
 ```
 
@@ -97,66 +55,64 @@ while (!simulationFinished)
 
 ```json
 {
-  "requestId": "match_123_shot_456",
-  "success": true,
-  "boardId": 7,
-  "simulationTimeMs": 3.84,
-  "striker": {
-    "finalPosition": { "x": -1.42, "y": 2.83 },
-    "finalVelocity": { "x": 0.0, "y": 0.0 }
-  },
-  "pocketedTokens": [
-    { "id": "black_01", "pocketId": 2 }
-  ],
-  "tokens": [
-    { "id": "white_01", "position": { "x": 1.21, "y": -0.73 } }
-  ]
+  "requestId":"shot-001",
+  "success":true,
+  "boardId":3,
+  "simulationTimeMs":4.2,
+  "simulatedSeconds":2.1,
+  "strikerFinalPosition":{"x":1.1,"y":-3.2},
+  "strikerFinalVelocity":{"x":0,"y":0},
+  "strikerPocketed":false,
+  "tokens":[{"id":"black-01","type":"black","finalPosition":{"x":0.3,"y":0.4},"finalVelocity":{"x":0,"y":0},"pocketed":true}]
 }
 ```
 
-## Unity structure
+## Configuration
 
-```text
-Assets/_Project/
-├── Prefabs/
-│   ├── Board/
-│   ├── Pieces/
-│   └── Server/
-├── Scenes/
-│   ├── Bootstrap.unity
-│   └── Simulation.unity
-└── Scripts/
-    ├── Board/
-    ├── Configuration/
-    ├── Core/
-    ├── Logging/
-    ├── Networking/
-    ├── Physics/
-    ├── Pieces/
-    ├── Queue/
-    ├── Requests/
-    ├── Serialization/
-    └── Utilities/
+The example configuration documents the supported runtime settings. The worker reads environment variables and command-line overrides so the same build can be deployed across environments.
+
+| Setting | Environment | CLI | Default |
+|---|---|---|---:|
+| Port | `CARROM_PORT` | `-port` | 8080 |
+| Boards | `CARROM_BOARD_COUNT` | `-boardCount` | 10 |
+| Queue | `CARROM_QUEUE_CAPACITY` | `-queueCapacity` | 1000 |
+| Time scale | `CARROM_TIME_SCALE` | `-timeScale` | 50 |
+| Max simulation seconds | `CARROM_MAX_SIMULATION_SECONDS` | `-maxSimulationSeconds` | 8 |
+
+Example:
+
+```bash
+./CarromHeadlessServer.x86_64 -batchmode -nographics -port 8080 -boardCount 10 -queueCapacity 1000
 ```
 
-## Engineering goals
+## Unity build
 
-- isolate simulations so concurrent requests cannot share mutable physics state
-- avoid allocations in hot simulation paths where practical
-- validate all client-controlled values at the request boundary
-- reset every board before returning it to the pool
-- make simulation completion explicit instead of relying on arbitrary delays
-- keep transport, queueing, simulation, and serialization independently testable
+Open with **Unity 6**, select a Linux standalone target and build the project as a headless/server worker. The runtime bootstrap creates the simulation server before the first scene is loaded, so the worker does not depend on a rendered scene.
 
-## Production considerations
+Recommended launch flags:
 
-For production-grade deterministic validation, pin Unity and physics versions, control fixed timestep and solver settings, avoid nondeterministic inputs, and record a simulation/version identifier with every authoritative result.
+```bash
+-batchmode -nographics -port 8080
+```
 
-Horizontal scaling is straightforward: run multiple headless workers, each with its own board pool, behind a gateway that routes a match/session consistently.
+The included `Assets/Scenes/Headless.unity` is retained from the supplied project; runtime bootstrap is the authoritative startup path.
 
-## Status
+## Production deployment notes
 
-This repository is an architecture-focused reference implementation and portfolio project. Networking is represented behind a transport abstraction so the Unity simulation core remains independently testable.
+This worker is designed to be horizontally scalable: run multiple identical headless processes behind a gateway and route a match/session consistently to one worker when state affinity is required.
+
+For production game validation, pin the exact Unity version and physics settings, keep the same simulation constants across workers, record a server/build version with authoritative results, and load-test the queue/board ratio before setting capacity limits.
+
+The WebSocket implementation is intentionally small and dependency-free for a controlled service boundary. For internet-facing deployment, terminate TLS and apply authentication, rate limiting, connection limits and observability at the gateway/load-balancer layer.
+
+## Local test
+
+Install the Python WebSocket client dependency:
+
+```bash
+pip install websockets
+python test_client.py
+```
 
 ## License
 
